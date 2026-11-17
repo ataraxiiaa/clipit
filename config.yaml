@@ -87,6 +87,8 @@ codex:                      # optional second-opinion judge via the Codex CLI (C
   timeout_sec: 240
 
 vod:                        # clipping an existing video (YouTube link or file) at full speed
-  max_height: 1080
+  quality_mode: lowres_first  # lowres_first = analyse a small copy, then download only accepted sections in HD; full = download everything in HD
+  analysis_height: 360      # size of the copy used to find highlights (audio is kept at normal quality)
+  clip_height: 1080         # quality of the finished clips
   max_hours: 6              # refuse longer videos
   keep_source: false        # keep the downloaded video after processing (needs disk space)

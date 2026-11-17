@@ -250,7 +250,16 @@ def _make_raw(an, clip_id, start, end):
     raw = folder / "raw.mp4"
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        render.cut_raw(an.store.range(start, end), start, end, raw)
+        hq = getattr(an, "fetch_hq", None)
+        done = False
+        if hq:                                  # video mode: pull just this section in full quality
+            try:
+                hq(start, end, raw)
+                done = True
+            except Exception as e:  # noqa: BLE001 - fall back to the (lower quality) analysis copy
+                log.warning("HD section download failed for clip %s (%s); using the analysis copy", clip_id, str(e)[-160:])
+        if not done:
+            render.cut_raw(an.store.range(start, end), start, end, raw)
         db.update("clips", clip_id, status="ready", raw_path=str(raw), t_start=start, t_end=end)
         log.info("clip %s ready (%.0fs)", clip_id, end - start)
     except Exception as e:  # noqa: BLE001

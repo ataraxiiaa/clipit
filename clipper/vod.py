@@ -44,7 +44,7 @@ class VodJob:
         threading.Thread(target=self._run, daemon=True, name=f"vod-{self.id}").start()
 
     # ------------------------------------------------------------------ steps
-    def _download(self) -> Path:
+    def _download(self, height: int) -> Path:
         import yt_dlp
         self.state, self.note = "downloading", "Starting download"
 
@@ -56,7 +56,7 @@ class VodJob:
                 self.progress = (d.get("downloaded_bytes", 0) / tot) if tot else 0.0
                 self.note = f"Downloading {self.progress * 100:.0f}%"
 
-        h = int(config.get("vod.max_height", 1080))
+        h = int(height)
         opts = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}][ext=mp4]/bv*[height<={h}]+ba/b",
                 "outtmpl": str(self.dir / "source.%(ext)s"), "noplaylist": True, "quiet": True, "no_warnings": True,
                 "merge_output_format": "mp4", "progress_hooks": [hook], "logger": _Quiet(), "retries": 5}
@@ -77,6 +77,36 @@ class VodJob:
             raise RuntimeError("download produced no file")
         return max(files, key=lambda p: p.stat().st_size)
 
+    def _fetch_hq(self, start: float, end: float, out: Path):
+        """Download only [start, end] of the video in full quality, then trim it frame-accurately into `out`."""
+        import yt_dlp
+        from yt_dlp.utils import download_range_func
+        from . import render
+        pad = 2.0
+        a, b = max(0.0, start - pad), end + pad
+        tmp = self.dir / f"hq_{int(start)}"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        h = int(config.get("vod.clip_height", 1080))
+        opts = {"format": f"bv*[height<={h}][vcodec^=avc1]+ba[acodec^=mp4a]/b[height<={h}][ext=mp4]/bv*[height<={h}]+ba/b",
+                "outtmpl": str(tmp / "hq.%(ext)s"), "noplaylist": True, "quiet": True, "no_warnings": True,
+                "merge_output_format": "mp4", "logger": _Quiet(), "retries": 5,
+                "download_ranges": download_range_func(None, [(a, b)]), "force_keyframes_at_cuts": True}
+        try:
+            self.note = f"Downloading HD section at {int(start // 60)}:{int(start % 60):02d}"
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([self.url])
+            files = sorted(tmp.glob("*.mp4"), key=lambda p: p.stat().st_size, reverse=True) or \
+                [p for p in tmp.iterdir() if p.suffix not in (".part", ".ytdl")]
+            if not files:
+                raise RuntimeError("no HD file produced")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            base = ["ffmpeg", "-y", "-v", "error", "-i", str(files[0]), "-ss", f"{start - a:.3f}", "-t", f"{end - start:.3f}"]
+            render._encode(base, [], out, cq=19, audio=True, full_fps=True)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            self.note = "Finding highlights"
+
     def _segment(self, src: Path) -> list[Path]:
         self.state, self.note, self.progress = "preparing", "Cutting into analysis pieces", 0.0
         p = util.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0", str(src)])
@@ -92,7 +122,9 @@ class VodJob:
 
     def _run(self):
         try:
-            src = Path(self.url) if self.is_file else self._download()
+            lowres = (not self.is_file) and config.get("vod.quality_mode", "lowres_first") == "lowres_first"
+            src = Path(self.url) if self.is_file else self._download(
+                int(config.get("vod.analysis_height", 360)) if lowres else int(config.get("vod.clip_height", 1080)))
             if self.cancel.is_set():
                 raise InterruptedError
             pieces = self._segment(src)
@@ -102,6 +134,8 @@ class VodJob:
             stream = {"id": self.id, "url": self.url, "streamer": self.streamer, "title": self.title}
             ready: list = []
             an = pipeline.Analyzer(stream, store, lambda a, c: ready.append(c))
+            if lowres:
+                an.fetch_hq = self._fetch_hq
             self.state, self.note = "analyzing", "Finding highlights"
             clock = 0.0
             durs = [util.probe_duration(p) for p in pieces]
