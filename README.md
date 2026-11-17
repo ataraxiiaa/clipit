@@ -24,8 +24,13 @@ start.bat            # starts the server and opens http://127.0.0.1:8780
    *Export* with a layout and platform. *Clip last 45s* makes a manual clip from the buffer.
 4. Thresholds, clip lengths, weights and export settings are editable in the dashboard (saved to `data/settings.json`).
 
-Direct HLS/RTMP URLs and local video files also work as sources (a local file is replayed in real time, which is how the
-live pipeline was tested without a public stream).
+### Clip an existing video (YouTube link or file)
+Use the **Clip a video** card: paste a YouTube link (or any link yt-dlp supports, or a local file path) and press *Find clips*.
+The video is downloaded (up to 1080p, `vod.max_height`), then analysed at full speed through the same pipeline as a live
+stream. A 13-minute test file took about 3 minutes (sharing the GPU with a live recording); a progress bar shows the state.
+Clips land in the same list, with their position shown as "m:ss in video". Live streams must be added as streams instead.
+Source videos are deleted after processing (`vod.keep_source: true` keeps them). Videos over 6 h are refused (`vod.max_hours`).
+Direct HLS/RTMP URLs also work as live sources.
 
 ## How it works
 
