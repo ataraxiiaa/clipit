@@ -1,0 +1,87 @@
+# Livestream Clipper configuration. Defaults live here; values changed in the dashboard are stored in
+# data/settings.json and override this file. Restart is only needed for the `server` and `paths` sections.
+server:
+  host: 127.0.0.1
+  port: 8780
+
+paths:
+  data: data
+
+capture:
+  # streamlink quality preference list (first available wins)
+  quality: "1080p60,1080p,720p60,720p,best"
+  segment_sec: 4            # rolling-buffer piece length (stream-copied, never re-encoded)
+  buffer_sec: 240           # seconds of footage kept (must be >= 90)
+  max_buffer_gb: 3.0        # hard cap on unpinned buffer size per stream
+  offline_poll_sec: 30      # how often to check whether an offline channel went live
+  reconnect_delay_sec: 5    # first retry delay after a drop (grows to 60 s)
+  stall_sec: 25             # no new segment for this long = restart the recorder
+
+analysis:
+  warmup_sec: 40            # build a baseline before triggering
+  baseline_sec: 180         # rolling window the "normal level" of the stream is measured on
+  frame_interval_sec: 2.5   # visual sampling rate (small grayscale frames only)
+  scan_every_sec: 40        # conversation scan: judge speech-dense stretches even without a loud spike (0 = off)
+  scan_window_sec: 40
+
+scoring:
+  weights: {audio: 0.40, visual: 0.15, chat: 0.10, speech: 0.35}
+  candidate_threshold: 0.50   # cheap signals (audio/visual/chat) needed to wake the GPU
+  accept_threshold: 0.55      # final blended score needed to keep a clip
+  scan_accept_threshold: 0.62 # stricter speech-only bar for conversation-scan candidates
+  min_speech_score: 0.35      # the language model must rate the moment at least this (0-1) when it ran
+  cooldown_sec: 25            # minimum time between triggers
+  chat_enabled: true          # read Twitch chat anonymously (read-only) for activity spikes
+
+clips:
+  pre_sec: 20               # footage kept before the trigger
+  post_sec: 12              # footage kept after the trigger (payoff)
+  min_len: 20
+  max_len: 60
+  merge_gap_sec: 15         # overlapping / nearly adjacent highlights are merged
+  dedupe_overlap: 0.5       # >50 % time overlap with an existing clip = duplicate
+  keep_rejected_sec: 3600   # rejected candidates' footage is deleted after this long
+
+asr:
+  model: small              # faster-whisper model: tiny/base/small/medium
+  language: en              # null = auto-detect
+  device: auto              # auto | cuda | cpu
+  compute_type: float16     # float16 on GPU, int8 is used automatically on CPU
+  min_free_vram_mb: 2500    # below this the CPU fallback is used
+  unload_after_sec: 300     # free VRAM when idle
+
+llm:
+  host: http://127.0.0.1:11434
+  model: qwen2.5:3b-instruct
+  keep_alive: 3m
+  num_ctx: 4096
+  timeout_sec: 120
+
+export:
+  layout: auto              # auto | blur | crop | split | landscape
+  fps: 30
+  width: 1080
+  height: 1920
+  nvenc: true               # fall back to libx264 automatically if NVENC fails
+  cq: 21
+  captions: true
+  auto_export: true         # make the vertical captioned version as soon as a clip is ready
+  caption:
+    font: Arial Black
+    size: 74
+    uppercase: true
+    primary: "#FFE600"      # active word
+    secondary: "#FFFFFF"    # other words
+    outline: "#000000"
+    outline_px: 6
+    words_per_line: 3
+    margin_bottom: 520      # px from bottom edge (clear of platform UI)
+  platforms:                # approximate UI-safe bottom margins (px at 1080x1920)
+    tiktok: 480
+    reels: 430
+    shorts: 400
+
+codex:                      # optional second-opinion judge via the Codex CLI (ChatGPT login). SENDS transcript + frames to OpenAI.
+  auto: false               # true = review every ready clip automatically
+  model: ""                 # model name to pass to codex -m (empty = Codex default)
+  timeout_sec: 240
