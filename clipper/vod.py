@@ -107,7 +107,7 @@ class VodJob:
             shutil.rmtree(tmp, ignore_errors=True)
             self.note = "Finding highlights"
 
-    def _segment(self, src: Path) -> list[Path]:
+    def _segment(self, src: Path) -> list[tuple]:
         self.state, self.note, self.progress = "preparing", "Cutting into analysis pieces", 0.0
         p = util.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0", str(src)])
         codecs = p.stdout.decode().split()
@@ -117,8 +117,13 @@ class VodJob:
         seg.mkdir(exist_ok=True)
         util.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", *enc, "-f", "segment",
                   "-segment_time", str(config.get("capture.segment_sec")), "-segment_format", "mpegts", "-reset_timestamps", "1",
-                  str(seg / "s_%05d.ts")], timeout=7200)
-        return sorted(seg.glob("s_*.ts"))
+                  "-segment_list", str(self.dir / "seg.csv"), "-segment_list_type", "csv", str(seg / "s_%05d.ts")], timeout=7200)
+        out = []                                  # (path, start, end) on the SOURCE video's own clock
+        for line in (self.dir / "seg.csv").read_text(encoding="utf-8").splitlines():
+            parts = line.split(",")
+            if len(parts) >= 3 and (seg / parts[0]).exists():
+                out.append((seg / parts[0], float(parts[1]), float(parts[2])))
+        return out
 
     def _run(self):
         try:
@@ -138,15 +143,15 @@ class VodJob:
                 an.fetch_hq = self._fetch_hq
             self.state, self.note = "analyzing", "Finding highlights"
             clock = 0.0
-            durs = [util.probe_duration(p) for p in pieces]
-            total = sum(durs) or 1.0
-            for p, d in zip(pieces, durs):
+            total = pieces[-1][2] or 1.0
+            for p, a, b in pieces:
                 if self.cancel.is_set():
                     raise InterruptedError
+                d = b - a
                 if d <= 0.2:
                     continue
-                seg = store.add(p, clock, d)
-                clock += d
+                seg = store.add(p, a, d)           # a = true position in the video, so clip times match real video time
+                clock = b
                 an.process_segment(seg)
                 self._drain(an, ready)
                 self.progress = clock / total

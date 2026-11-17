@@ -245,6 +245,26 @@ def _store_result(an, cand, res, segs):
     return res
 
 
+def _realign_words(clip_id, raw, start):
+    """Word times measured on the analysis copy can differ from the HD file; transcribe the delivered clip itself."""
+    try:
+        words = asr.transcribe(signals.decode_audio(raw), offset=start)
+        if len(words) >= 3:
+            old = json.loads((db.one("SELECT words FROM clips WHERE id=?", (clip_id,)) or {}).get("words") or "[]")
+            key = lambda w: re.sub(r"[^a-z0-9]", "", w.lower())
+            diffs = []
+            for w in words:                     # how far was the analysis timeline from the delivered video?
+                m = [o["s"] for o in old if key(o["w"]) == key(w["w"]) and len(key(w["w"])) >= 3 and abs(o["s"] - w["s"]) < 15]
+                if m:
+                    diffs.append(min(m, key=lambda s: abs(s - w["s"])) - w["s"])
+            if len(diffs) >= 5:
+                log.info("clip %s: analysis timeline vs delivered video offset %+.2fs (median of %d words)",
+                         clip_id, float(np.median(diffs)), len(diffs))
+            db.update("clips", clip_id, words=words, transcript=" ".join(w["w"] for w in words))
+    except Exception as e:  # noqa: BLE001 - keep the original words
+        log.warning("caption re-alignment failed for clip %s: %s", clip_id, str(e)[-120:])
+
+
 def _make_raw(an, clip_id, start, end):
     folder = config.SETTINGS.data_dir / "clips" / str(clip_id)
     raw = folder / "raw.mp4"
@@ -256,6 +276,7 @@ def _make_raw(an, clip_id, start, end):
             try:
                 hq(start, end, raw)
                 done = True
+                _realign_words(clip_id, raw, start)
             except Exception as e:  # noqa: BLE001 - fall back to the (lower quality) analysis copy
                 log.warning("HD section download failed for clip %s (%s); using the analysis copy", clip_id, str(e)[-160:])
         if not done:
