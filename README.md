@@ -26,8 +26,10 @@ start.bat            # starts the server and opens http://127.0.0.1:8780
 
 ### Clip an existing video (YouTube link or file)
 Use the **Clip a video** card: paste a YouTube link (or any link yt-dlp supports, or a local file path) and press *Find clips*.
-The video is downloaded (up to 1080p, `vod.max_height`), then analysed at full speed through the same pipeline as a live
-stream. A 13-minute test file took about 3 minutes (sharing the GPU with a live recording); a progress bar shows the state.
+By default (`vod.quality_mode: lowres_first`) only a small 360p copy is downloaded and analysed; each *accepted* clip is then
+fetched as just its own section at full 1080p and trimmed precisely (if that download fails it falls back to the small
+copy). Set `quality_mode: full` to download the whole video in HD instead. Analysis runs at full speed through the same
+pipeline as a live stream; each accepted clip adds roughly 25 s for its HD download (measured on one 1080p test video). A 13-minute test file took about 3 minutes (sharing the GPU with a live recording); a progress bar shows the state.
 Clips land in the same list, with their position shown as "m:ss in video". Live streams must be added as streams instead.
 Source videos are deleted after processing (`vod.keep_source: true` keeps them). Videos over 6 h are refused (`vod.max_hours`).
 Direct HLS/RTMP URLs also work as live sources.
