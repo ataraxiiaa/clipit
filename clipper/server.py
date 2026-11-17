@@ -1,12 +1,19 @@
 """FastAPI app: JSON API + static dashboard. Heavy work runs in background threads, never in request handlers."""
 import json
 import logging
+import os
+import re
+import shutil
+import tempfile
 import threading
+import time
+import zipfile
 from pathlib import Path
 
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
+from starlette.background import BackgroundTask
 
 from . import codex_judge, config, db, pipeline, util, vod
 
@@ -51,7 +58,9 @@ def cancel_vod(jid: int):
 
 @app.get("/api/state")
 def state():
-    return MGR.state()
+    s = MGR.state()
+    s["bulk"] = [BULK[k] for k in sorted(BULK)[-3:]]
+    return s
 
 
 @app.post("/api/streams")
@@ -119,19 +128,96 @@ def clips(stream_id: int | None = None, status: str = "ready", review: str | Non
     return [_clip_row(r, ex) for r in rows]
 
 
+def _reject(cid: int) -> bool:
+    """reject = delete: remove the video files and exports, keep a tiny record so the moment is not re-clipped."""
+    if not db.one("SELECT id FROM clips WHERE id=?", (cid,)):
+        return False
+    shutil.rmtree(config.SETTINGS.data_dir / "clips" / str(cid), ignore_errors=True)
+    db.x("DELETE FROM exports WHERE clip_id=?", (cid,))
+    db.update("clips", cid, review="rejected", status="rejected", raw_path=None, words=None)
+    return True
+
+
+BULK: dict = {}
+
+
+def _run_bulk(job: dict, ids: list, opts: dict):
+    for cid in ids:
+        try:
+            if job["action"] == "export":
+                pipeline.export(cid, opts["layout"], opts["platform"], opts["captions"])
+            else:
+                codex_judge.review(cid)
+        except Exception as e:  # noqa: BLE001 - one failing clip must not stop the rest
+            job["errors"].append(f"clip {cid}: {str(e)[-140:]}")
+        job["done"] += 1
+    job["state"] = "done"
+    job["finished"] = time.time()
+
+
+@app.post("/api/bulk")
+def bulk(body: dict = Body(...)):
+    ids = [int(i) for i in body.get("ids", []) if str(i).isdigit()][:500]
+    action = body.get("action")
+    if not ids:
+        raise HTTPException(400, "no clips selected")
+    if action in ("accept", "reject"):
+        n = 0
+        for cid in ids:
+            if action == "reject":
+                n += _reject(cid)
+            else:
+                db.update("clips", cid, review="accepted")
+                n += 1
+        return {"ok": True, "count": n}
+    if action not in ("export", "codex"):
+        raise HTTPException(400, "unknown action")
+    if action == "codex" and not codex_judge.available():
+        raise HTTPException(400, "Codex CLI not found. Install it and run `codex login`.")
+    if any(j["state"] == "running" for j in BULK.values()):
+        raise HTTPException(400, "A bulk job is already running. Wait for it to finish.")
+    jid = (max(BULK) + 1) if BULK else 1
+    job = {"id": jid, "action": action, "total": len(ids), "done": 0, "errors": [], "state": "running", "started": time.time()}
+    BULK[jid] = job
+    opts = {"layout": body.get("layout", config.get("export.layout")), "platform": body.get("platform", "tiktok"),
+            "captions": body.get("captions", config.get("export.captions"))}
+    threading.Thread(target=_run_bulk, args=(job, ids, opts), daemon=True, name=f"bulk-{jid}").start()
+    return {"ok": True, "job": jid}
+
+
+@app.get("/api/zip")
+def zip_clips(ids: str, kind: str = "export"):
+    """One .zip of the selected clips: newest export of each (or the raw 16:9 file with kind=raw / when not exported yet)."""
+    files = []
+    for cid in [int(x) for x in ids.split(",") if x.strip().isdigit()][:200]:
+        c = db.one("SELECT * FROM clips WHERE id=?", (cid,))
+        if not c:
+            continue
+        path = None
+        if kind == "export":
+            path = next((e["path"] for e in db.q("SELECT path FROM exports WHERE clip_id=? ORDER BY id DESC", (cid,))
+                         if Path(e["path"]).exists()), None)
+        path = path or c["raw_path"]
+        if path and Path(path).exists():
+            safe = lambda s: re.sub(r"[^A-Za-z0-9._-]+", "_", str(s or ""))[:40].strip("_")
+            files.append((f"{safe(c['streamer'])}_{cid}_{safe(c['title'])}.mp4", path))
+    if not files:
+        raise HTTPException(404, "none of the selected clips has a video file")
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_STORED) as z:     # mp4 is already compressed
+        for name, p in files:
+            z.write(p, name)
+    return FileResponse(tmp.name, media_type="application/zip", filename="clips.zip", background=BackgroundTask(os.unlink, tmp.name))
+
+
 @app.post("/api/clips/{cid}/review")
 def review(cid: int, body: dict = Body(...)):
     if body.get("review") not in ("accepted", "rejected", "pending"):
         raise HTTPException(400, "review must be accepted/rejected/pending")
     if body["review"] == "rejected":
-        # reject = delete: remove the video files and exports, keep a tiny record so the moment is not re-clipped
-        import shutil
-        c = db.one("SELECT id FROM clips WHERE id=?", (cid,))
-        if not c:
+        if not _reject(cid):
             raise HTTPException(404, "no such clip")
-        shutil.rmtree(config.SETTINGS.data_dir / "clips" / str(cid), ignore_errors=True)
-        db.x("DELETE FROM exports WHERE clip_id=?", (cid,))
-        db.update("clips", cid, review="rejected", status="rejected", raw_path=None, words=None)
         return {"ok": True, "deleted": True}
     db.update("clips", cid, review=body["review"])
     return {"ok": True}
