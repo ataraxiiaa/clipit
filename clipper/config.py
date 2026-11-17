@@ -1,6 +1,7 @@
 """Settings: config.yaml defaults + data/settings.json overrides (edited from the dashboard)."""
 import copy
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -26,7 +27,9 @@ class Settings:
     def __init__(self, path: Path = ROOT / "config.yaml"):
         self.path = path
         self.d = yaml.safe_load(path.read_text(encoding="utf-8"))
-        self.data_dir = (ROOT / self.d["paths"]["data"]).resolve()
+        if os.environ.get("CLIPPER_PORT"):                    # lets a second, isolated instance run (tests)
+            self.d["server"]["port"] = int(os.environ["CLIPPER_PORT"])
+        self.data_dir = (ROOT / os.environ.get("CLIPPER_DATA", self.d["paths"]["data"])).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.overlay_path = self.data_dir / "settings.json"
         if self.overlay_path.exists():
