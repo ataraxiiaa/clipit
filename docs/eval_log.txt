@@ -1,0 +1,20 @@
+Candidates produced by cheap signals: 8; eval wall time 95s for 791s of stream
+A. audio-only (loudness)           detections= 3  TP=3/5 recall=0.60 precision=1.00  FP=[]  missed=['funny_quiet', 'funny_story']
+B. audio+visual+keywords (no LLM)  detections= 3  TP=3/5 recall=0.60 precision=1.00  FP=[]  missed=['funny_quiet', 'funny_story']
+C. full (Whisper+Qwen2.5-3B blend) detections= 5  TP=5/5 recall=1.00 precision=1.00  FP=[]  missed=[]
+Per-candidate detail:
+  t=   122 trig=signal label=shout              a=0.76 v=0.07 lex=0.90 llm=0.7 final=0.68 -> accepted [102-134] surprise: Unexpected reaction to a surprising action (6.9s)
+  t=   288 trig=scan   label=funny_quiet        a=0.15 v=0.07 lex=0.00 llm=0.8 final=0.80 -> accepted [264-303] rage: Unexpected and embarrassing situation (6.6s)
+  t=   369 trig=scan   label=-                  a=0.14 v=0.07 lex=0.00 llm=0.2 final=0.20 -> filtered [345-389] idle chatter: Discussion about buying armor, no clear action or reaction described (6.5s)
+  t=   410 trig=scan   label=-                  a=0.17 v=0.07 lex=0.00 llm=0.3 final=0.30 -> filtered [386-426] idle chatter: Loudness spike and visual change are minimal, and the transcript is mo (3.3s)
+  t=   476 trig=signal label=clutch             a=0.76 v=0.07 lex=1.00 llm=0.7 final=0.68 -> accepted [453-488] clutch: Player's clutch moment in a game scenario (6.4s)
+  t=   491 trig=scan   label=-                  a=0.61 v=0.07 lex=1.00 llm=0.7 final=0.85 -> accepted [467-507] clutch: Player's clutch moment in a competitive situation (5.0s)
+  t=   653 trig=scan   label=funny_story        a=0.07 v=0.07 lex=0.00 llm=0.7 final=0.70 -> accepted [627-669] funny: Unexpected reaction to mom's presence during a prank (5.4s)
+  t=   710 trig=signal label=rage               a=0.76 v=0.07 lex=1.00 llm=0.7 final=0.68 -> accepted [690-722] rage: Player expresses frustration with game mechanics (4.8s)
+Clip timing (does the clip contain the whole labeled moment?):
+   {'kind': 'shout', 'clip': [101.57, 133.57], 'label': [120, 127.3], 'covers_label': True, 'len': 32.0}
+   {'kind': 'funny_quiet', 'clip': [264.16, np.float64(303.41)], 'label': [290, 302.4], 'covers_label': np.True_, 'len': np.float64(39.2)}
+   {'kind': 'clutch', 'clip': [np.float64(452.83), 488.41], 'label': [470, 478.8], 'covers_label': True, 'len': np.float64(35.6)}
+   {'kind': 'funny_story', 'clip': [np.float64(626.68), 669.12], 'label': [630, 644.2], 'covers_label': True, 'len': np.float64(42.4)}
+   {'kind': 'rage', 'clip': [689.56, 721.56], 'label': [700, 709.0], 'covers_label': True, 'len': 32.0}
+Processing latency per candidate (ASR+LLM): mean 5.6s max 6.9s; peak VRAM used 5704 MB
