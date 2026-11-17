@@ -8,7 +8,7 @@ import uvicorn
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
-from . import codex_judge, config, db, pipeline, util
+from . import codex_judge, config, db, pipeline, util, vod
 
 log = logging.getLogger("clipper.server")
 app = FastAPI(title="Livestream Clipper")
@@ -29,6 +29,24 @@ def _startup():
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (WEB / "index.html").read_text(encoding="utf-8")
+
+
+@app.post("/api/vod")
+def add_vod(body: dict = Body(...)):
+    try:
+        job = vod.start(body.get("url", ""), body.get("streamer", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": job.id}
+
+
+@app.post("/api/vod/{jid}/cancel")
+def cancel_vod(jid: int):
+    j = vod.JOBS.get(jid)
+    if not j:
+        raise HTTPException(404, "no such video job")
+    j.cancel.set()
+    return {"ok": True}
 
 
 @app.get("/api/state")

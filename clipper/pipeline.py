@@ -437,7 +437,7 @@ class Manager:
             db.update("streams", sid, auto_start=0) if db.one("SELECT id FROM streams WHERE id=?", (sid,)) else None
 
     def resume_all(self):
-        for s in db.q("SELECT * FROM streams WHERE auto_start=1"):
+        for s in db.q("SELECT * FROM streams WHERE auto_start=1 AND platform!='vod'"):
             try:
                 self.start(s["id"])
             except Exception:  # noqa: BLE001
@@ -446,9 +446,10 @@ class Manager:
     def state(self):
         v = gpu.vram()
         streams = []
-        for s in db.q("SELECT * FROM streams ORDER BY id"):
+        for s in db.q("SELECT * FROM streams WHERE platform!='vod' ORDER BY id"):
             rt = self.rt.get(s["id"])
             streams.append({**s, "runtime": rt.status() if rt else {"state": "stopped"}})
-        return {"streams": streams, "gpu": {"used_mb": v[0], "total_mb": v[1], "util": v[2]} if v else None,
+        from . import vod
+        return {"vods": [j.status() for j in sorted(vod.JOBS.values(), key=lambda j: -j.id)], "streams": streams, "gpu": {"used_mb": v[0], "total_mb": v[1], "util": v[2]} if v else None,
                 "asr": asr.status(), "llm": judge.llm_status(), "queue": self.jobs.q.qsize(), "current_job": self.jobs.current,
                 "jobs_done": self.jobs.done, "jobs_failed": self.jobs.failed}

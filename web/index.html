@@ -33,6 +33,11 @@ label input[type=number]{width:80px}details summary{cursor:pointer;color:var(--m
   <div class="row"><input id="url" placeholder="https://twitch.tv/channel · youtube.com/@x/live · kick.com/x"></div>
   <div class="row"><input id="streamer" placeholder="Streamer name (optional)"><button class="p" onclick="addStream()">Add &amp; start</button></div>
   <div class="mut">Only record streams you have permission to clip.</div></div>
+ <div class="card"><h2>Clip a video (YouTube link or file)</h2>
+  <div class="row"><input id="vurl" placeholder="https://youtube.com/watch?v=… or E:/videos/match.mp4"></div>
+  <div class="row"><input id="vstreamer" placeholder="Streamer / channel (optional)"><button class="p" onclick="addVod()">Find clips</button></div>
+  <div class="mut">Downloads the video, then finds highlights at full speed. Only use videos you may clip.</div>
+  <div id="vods" style="margin-top:8px"></div></div>
  <div id="streams"></div>
  <div class="card"><h2>Detection &amp; clip settings</h2><div id="settings"></div><button onclick="saveSettings()" class="p">Save settings</button></div>
  <div class="card"><h2>Error log</h2><div class="logs" id="logs"></div></div>
@@ -49,6 +54,12 @@ const $=id=>document.getElementById(id),j=async(u,o)=>{const r=await fetch(u,o);
 const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function addStream(){try{await post('/api/streams',{url:$('url').value,streamer:$('streamer').value});$('url').value='';refresh()}catch(e){alert(e.message)}}
+async function addVod(){try{await post('/api/vod',{url:$('vurl').value,streamer:$('vstreamer').value});$('vurl').value='';refresh()}catch(e){alert(e.message)}}
+async function cancelVod(id){await post('/api/vod/'+id+'/cancel');refresh()}
+function vodHtml(v){const run=['queued','downloading','preparing','analyzing'].includes(v.state);const pct=Math.round(v.progress*100);
+ return `<div style="border-top:1px solid var(--line);padding:8px 0"><div class="row"><b style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(v.title||v.url)}</b><span class="pill ${run?'recording':v.state=='error'?'offline':'stopped'}">${v.state}</span></div>
+ ${run?`<div class="bar"><i style="width:${pct}%"></i></div>`:''}<div class="mut">${esc(v.note)} · ${v.clips} clip(s) · ${v.candidates} candidates checked</div>
+ ${run?`<button class="r" onclick="cancelVod(${v.id})">Cancel</button>`:''}</div>`}
 async function act(id,a,b){try{await post(`/api/streams/${id}/${a}`,b);refresh()}catch(e){alert(e.message)}}
 async function del(id){if(confirm('Remove this stream?')){await j('/api/streams/'+id,{method:'DELETE'});refresh()}}
 function spark(rows){const m=Math.max(.3,...rows.map(r=>Math.max(r.a,r.v)));return '<div class="spark" title="audio score (last 60 s)">'+rows.map(r=>`<i style="height:${Math.round(100*r.a/m)}%"></i>`).join('')+'</div>'}
@@ -57,13 +68,14 @@ async function refresh(){
  const g=s.gpu;$('gpu').textContent=g?`GPU ${g.used_mb}/${g.total_mb} MB · ${g.util}%`:'GPU n/a';
  $('asr').textContent='Whisper: '+(s.asr.loaded?s.asr.device:'idle');$('llm').textContent='LLM: '+(s.llm.up?(s.llm.model_present?'ready':'model missing'):'offline');
  $('queue').textContent=`AI queue ${s.queue}${s.current_job?' · working':''} · done ${s.jobs_done} · failed ${s.jobs_failed}`;
+ $('vods').innerHTML=(s.vods||[]).map(vodHtml).join('');
  $('streams').innerHTML=s.streams.map(x=>{const r=x.runtime,a=r.analysis||{};const run=!['stopped','idle',undefined].includes(r.state);
   return `<div class="card"><div class="row"><b>${esc(x.streamer||x.name)}</b><span class="pill ${r.state}">${r.state}</span><span class="pill">${x.platform}</span></div>
   <div class="mut" style="word-break:break-all">${esc(x.url)}</div>
   ${run?`<div class="mut">Buffer ${r.buffer_sec}s · ${r.disk_mb} MB · reconnects ${r.reconnects} · chat ${r.chat?'on':'off'}${r.note?' · '+esc(r.note):''}</div>
   <div class="mut">Analysis: ${a.segments} pieces · live score ${a.cheap_now} · candidates ${a.candidates} · pending ${r.pending}</div>${spark(r.recent||[])}`:''}
   <div class="row">${run?`<button onclick="act(${x.id},'stop')">Stop</button><button class="g" onclick="act(${x.id},'clip',{seconds:45})">Clip last 45s</button>`:`<button class="p" onclick="act(${x.id},'start')">Start</button>`}<button class="r" onclick="del(${x.id})">Remove</button></div></div>`}).join('')||'<div class="mut">No streams yet.</div>';
- const fs=$('f_stream');if(fs.options.length-1!==s.streams.length){const v=fs.value;fs.innerHTML='<option value="">all streamers</option>'+s.streams.map(x=>`<option value="${x.id}">${esc(x.streamer||x.name)}</option>`).join('');fs.value=v}
+ const fs=$('f_stream');const fl=[...s.streams,...(s.vods||[])];if(fs.options.length-1!==fl.length){const v=fs.value;fs.innerHTML='<option value="">all streamers</option>'+fl.map(x=>`<option value="${x.id}">${esc(x.streamer||x.name)}</option>`).join('');fs.value=v}
  const lg=await j('/api/logs');$('logs').innerHTML=lg.filter(l=>l.level!=='DEBUG').slice(-60).reverse().map(l=>`<div class="${l.level}">${new Date(l.t*1000).toLocaleTimeString()} ${l.src}: ${esc(l.msg)}</div>`).join('');
 }
 let lastClips='';
@@ -72,7 +84,7 @@ async function loadClips(force){
  const cs=await j('/api/clips?'+q);const sig=JSON.stringify(cs.map(c=>[c.id,c.review,c.exports.length,c.score,!!c.codex]));if(sig===lastClips&&!force)return;lastClips=sig;
  $('clips').innerHTML=cs.map(c=>{const sc=c.scores||{};const ex=c.exports;const vid=ex.length?`/media/export/${ex[ex.length-1].id}`:`/media/raw/${c.id}`;
   return `<div class="card clip"><video controls preload="metadata" src="${vid}"></video>
-  <div class="row"><span class="score">${Math.round(c.score*100)}</span><span class="pill">${esc(c.category)}</span><span class="pill">${esc(c.review)}</span><span class="mut">${esc(c.streamer)} · ${Math.round(c.t_end-c.t_start)}s · ${new Date(c.t_start*1000).toLocaleTimeString()}</span></div>
+  <div class="row"><span class="score">${Math.round(c.score*100)}</span><span class="pill">${esc(c.category)}</span><span class="pill">${esc(c.review)}</span><span class="mut">${esc(c.streamer)} · ${Math.round(c.t_end-c.t_start)}s · ${c.t_start<1e8?(Math.floor(c.t_start/60)+':'+String(Math.floor(c.t_start%60)).padStart(2,'0')+' in video'):new Date(c.t_start*1000).toLocaleTimeString()}</span></div>
   <b>${esc(c.title)}</b><div class="mut">${esc(c.reason)}</div>
   <div class="bd"><span class="pill">audio ${sc.audio?.toFixed?.(2)}</span><span class="pill">visual ${sc.visual?.toFixed?.(2)}</span><span class="pill">chat ${sc.chat?.toFixed?.(2)}</span><span class="pill">speech ${sc.speech}</span><span class="pill">${sc.llm_used?'LLM':'keywords'}</span></div>
   ${c.codex?`<div class="mut" style="border-left:3px solid var(--acc);padding-left:8px;margin:6px 0"><b>Codex: ${c.codex.score} · ${esc(c.codex.verdict)}</b> — ${esc(c.codex.reason)}<br><i>${esc(c.codex.boundary_note)}</i></div>`:''}
