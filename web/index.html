@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Livestream Clipper</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--tx:#e8eaf0;--mut:#8b93a5;--ok:#3ecf8e;--warn:#f5b73b;--bad:#ef5b5b;--acc:#6c8cff}
+@media(prefers-color-scheme:light){:root{--bg:#f4f5f8;--card:#fff;--line:#dfe2ea;--tx:#1a1d24;--mut:#667085}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+header{display:flex;gap:16px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+h1{font-size:17px;margin:0}main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:16px;padding:16px 20px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 10px}
+input,select,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+button.g{border-color:var(--ok);color:var(--ok)}button.r{border-color:var(--bad);color:var(--bad)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}.row>input{flex:1;min-width:120px}
+.pill{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.recording{color:var(--ok);border-color:var(--ok)}.offline,.connecting,.reconnecting{color:var(--warn);border-color:var(--warn)}.stopped{color:var(--mut)}
+.mut{color:var(--mut);font-size:12px}.bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden}.bar>i{display:block;height:100%;background:var(--acc)}
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.clip video{width:100%;border-radius:8px;background:#000;max-height:360px}
+.score{font-size:22px;font-weight:700}.bd{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.spark{display:flex;align-items:flex-end;gap:1px;height:34px;margin:6px 0}.spark i{flex:1;background:var(--acc);min-height:1px;opacity:.85}
+.logs{font:11px/1.4 ui-monospace,Consolas,monospace;max-height:220px;overflow:auto;white-space:pre-wrap}
+.E,.ERROR{color:var(--bad)}.WARNING{color:var(--warn)}label{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:4px 0;font-size:13px}
+label input[type=number]{width:80px}details summary{cursor:pointer;color:var(--mut)}
+</style></head><body>
+<header><h1>Livestream Clipper</h1>
+<span id="gpu" class="pill">GPU …</span><span id="asr" class="pill">ASR …</span><span id="llm" class="pill">LLM …</span><span id="queue" class="pill">queue 0</span></header>
+<main>
+<aside>
+ <div class="card"><h2>Add stream (authorized only)</h2>
+  <div class="row"><input id="url" placeholder="https://twitch.tv/channel · youtube.com/@x/live · kick.com/x"></div>
+  <div class="row"><input id="streamer" placeholder="Streamer name (optional)"><button class="p" onclick="addStream()">Add &amp; start</button></div>
+  <div class="mut">Only record streams you have permission to clip.</div></div>
+ <div id="streams"></div>
+ <div class="card"><h2>Detection &amp; clip settings</h2><div id="settings"></div><button onclick="saveSettings()" class="p">Save settings</button></div>
+ <div class="card"><h2>Error log</h2><div class="logs" id="logs"></div></div>
+</aside>
+<section>
+ <div class="row"><b>Clips</b><select id="f_review" onchange="loadClips()"><option value="">all</option><option value="pending">pending review</option><option value="accepted">accepted</option></select>
+  <select id="f_stream" onchange="loadClips()"><option value="">all streamers</option></select>
+  <label style="gap:4px">layout<select id="layout"><option>auto</option><option>blur</option><option>crop</option><option>split</option><option>landscape</option></select></label>
+  <label style="gap:4px">platform<select id="platform"><option>tiktok</option><option>reels</option><option>shorts</option></select></label></div>
+ <div class="clips" id="clips"></div>
+</section></main>
+<script>
+const $=id=>document.getElementById(id),j=async(u,o)=>{const r=await fetch(u,o);if(!r.ok){let t='';try{t=(await r.json()).detail}catch(e){}throw new Error(t||r.status)}return r.json()};
+const post=(u,b)=>j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function addStream(){try{await post('/api/streams',{url:$('url').value,streamer:$('streamer').value});$('url').value='';refresh()}catch(e){alert(e.message)}}
+async function act(id,a,b){try{await post(`/api/streams/${id}/${a}`,b);refresh()}catch(e){alert(e.message)}}
+async function del(id){if(confirm('Remove this stream?')){await j('/api/streams/'+id,{method:'DELETE'});refresh()}}
+function spark(rows){const m=Math.max(.3,...rows.map(r=>Math.max(r.a,r.v)));return '<div class="spark" title="audio score (last 60 s)">'+rows.map(r=>`<i style="height:${Math.round(100*r.a/m)}%"></i>`).join('')+'</div>'}
+async function refresh(){
+ const s=await j('/api/state');
+ const g=s.gpu;$('gpu').textContent=g?`GPU ${g.used_mb}/${g.total_mb} MB · ${g.util}%`:'GPU n/a';
+ $('asr').textContent='Whisper: '+(s.asr.loaded?s.asr.device:'idle');$('llm').textContent='LLM: '+(s.llm.up?(s.llm.model_present?'ready':'model missing'):'offline');
+ $('queue').textContent=`AI queue ${s.queue}${s.current_job?' · working':''} · done ${s.jobs_done} · failed ${s.jobs_failed}`;
+ $('streams').innerHTML=s.streams.map(x=>{const r=x.runtime,a=r.analysis||{};const run=!['stopped','idle',undefined].includes(r.state);
+  return `<div class="card"><div class="row"><b>${esc(x.streamer||x.name)}</b><span class="pill ${r.state}">${r.state}</span><span class="pill">${x.platform}</span></div>
+  <div class="mut" style="word-break:break-all">${esc(x.url)}</div>
+  ${run?`<div class="mut">Buffer ${r.buffer_sec}s · ${r.disk_mb} MB · reconnects ${r.reconnects} · chat ${r.chat?'on':'off'}${r.note?' · '+esc(r.note):''}</div>
+  <div class="mut">Analysis: ${a.segments} pieces · live score ${a.cheap_now} · candidates ${a.candidates} · pending ${r.pending}</div>${spark(r.recent||[])}`:''}
+  <div class="row">${run?`<button onclick="act(${x.id},'stop')">Stop</button><button class="g" onclick="act(${x.id},'clip',{seconds:45})">Clip last 45s</button>`:`<button class="p" onclick="act(${x.id},'start')">Start</button>`}<button class="r" onclick="del(${x.id})">Remove</button></div></div>`}).join('')||'<div class="mut">No streams yet.</div>';
+ const fs=$('f_stream');if(fs.options.length-1!==s.streams.length){const v=fs.value;fs.innerHTML='<option value="">all streamers</option>'+s.streams.map(x=>`<option value="${x.id}">${esc(x.streamer||x.name)}</option>`).join('');fs.value=v}
+ const lg=await j('/api/logs');$('logs').innerHTML=lg.filter(l=>l.level!=='DEBUG').slice(-60).reverse().map(l=>`<div class="${l.level}">${new Date(l.t*1000).toLocaleTimeString()} ${l.src}: ${esc(l.msg)}</div>`).join('');
+}
+let lastClips='';
+async function loadClips(force){
+ const q=new URLSearchParams({status:'ready'});if($('f_review').value)q.set('review',$('f_review').value);if($('f_stream').value)q.set('stream_id',$('f_stream').value);
+ const cs=await j('/api/clips?'+q);const sig=JSON.stringify(cs.map(c=>[c.id,c.review,c.exports.length,c.score,!!c.codex]));if(sig===lastClips&&!force)return;lastClips=sig;
+ $('clips').innerHTML=cs.map(c=>{const sc=c.scores||{};const ex=c.exports;const vid=ex.length?`/media/export/${ex[ex.length-1].id}`:`/media/raw/${c.id}`;
+  return `<div class="card clip"><video controls preload="metadata" src="${vid}"></video>
+  <div class="row"><span class="score">${Math.round(c.score*100)}</span><span class="pill">${esc(c.category)}</span><span class="pill">${esc(c.review)}</span><span class="mut">${esc(c.streamer)} · ${Math.round(c.t_end-c.t_start)}s · ${new Date(c.t_start*1000).toLocaleTimeString()}</span></div>
+  <b>${esc(c.title)}</b><div class="mut">${esc(c.reason)}</div>
+  <div class="bd"><span class="pill">audio ${sc.audio?.toFixed?.(2)}</span><span class="pill">visual ${sc.visual?.toFixed?.(2)}</span><span class="pill">chat ${sc.chat?.toFixed?.(2)}</span><span class="pill">speech ${sc.speech}</span><span class="pill">${sc.llm_used?'LLM':'keywords'}</span></div>
+  ${c.codex?`<div class="mut" style="border-left:3px solid var(--acc);padding-left:8px;margin:6px 0"><b>Codex: ${c.codex.score} · ${esc(c.codex.verdict)}</b> — ${esc(c.codex.reason)}<br><i>${esc(c.codex.boundary_note)}</i></div>`:''}
+  <details><summary>Transcript</summary><div class="mut">${esc(c.transcript)}</div></details>
+  <div class="row"><button class="g" onclick="rv(${c.id},'accepted')">Accept</button><button class="r" onclick="rv(${c.id},'rejected')">Reject</button>
+  <button onclick="ex(${c.id})">Export</button><button id="cx${c.id}" onclick="cx(${c.id})">Ask Codex</button>${ex.map(e=>`<a class="pill" href="/media/export/${e.id}" download>${e.platform}/${e.layout}</a>`).join('')}<a class="pill" href="/media/raw/${c.id}" download>raw 16:9</a></div></div>`}).join('')||'<div class="mut">No clips yet. Clips appear here after the AI accepts a moment.</div>';
+}
+async function rv(id,r){if(r==='rejected'&&!confirm('Reject and permanently delete this clip and its exports?'))return;try{await post(`/api/clips/${id}/review`,{review:r});loadClips(1)}catch(e){alert(e.message)}}
+async function cx(id){if(!confirm('This sends the clip transcript, scores and 4 small frames to OpenAI through your Codex login. Continue?'))return;const b=$('cx'+id);b.disabled=true;b.textContent='Asking Codex…';try{await post(`/api/clips/${id}/codex`);loadClips(1)}catch(e){alert(e.message);b.disabled=false;b.textContent='Ask Codex'}}
+async function ex(id){try{await post(`/api/clips/${id}/export`,{layout:$('layout').value,platform:$('platform').value});loadClips(1)}catch(e){alert(e.message)}}
+const FIELDS=[['scoring.candidate_threshold','Candidate threshold (cheap signals)',.01],['scoring.accept_threshold','Accept threshold (final)',.01],['scoring.min_speech_score','Min speech score',.01],['scoring.cooldown_sec','Cooldown (s)',1],
+ ['scoring.weights.audio','Weight: audio',.05],['scoring.weights.visual','Weight: visual',.05],['scoring.weights.chat','Weight: chat',.05],['scoring.weights.speech','Weight: speech',.05],
+ ['clips.pre_sec','Pre-roll (s)',1],['clips.post_sec','Post-roll (s)',1],['clips.min_len','Min length (s)',1],['clips.max_len','Max length (s)',1],['capture.buffer_sec','Buffer (s, ≥90)',10],['analysis.scan_every_sec','Conversation scan every (s, 0=off)',10],['export.cq','Export quality CQ (lower=better)',1]];
+let ST={};const gp=(o,p)=>p.split('.').reduce((a,k)=>a?.[k],o);
+async function loadSettings(){ST=await j('/api/settings');$('settings').innerHTML=FIELDS.map(([p,l,st])=>`<label>${l}<input type="number" step="${st}" data-p="${p}" value="${gp(ST,p)}"></label>`).join('')+
+ `<label>Export layout<select data-p="export.layout">${['auto','blur','crop','split','landscape'].map(o=>`<option ${gp(ST,'export.layout')==o?'selected':''}>${o}</option>`).join('')}</select></label>
+  <label>Captions<input type="checkbox" data-p="export.captions" ${ST.export.captions?'checked':''}></label>
+  <label title="Sends transcript + frames to OpenAI via Codex">Codex review every clip<input type="checkbox" data-p="codex.auto" ${ST.codex.auto?'checked':''}></label>
+  <label>Codex model (blank = default)<input type="text" data-p="codex.model" value="${esc(ST.codex.model)}" style="width:120px"></label>`}
+async function saveSettings(){const patch={};document.querySelectorAll('[data-p]').forEach(el=>{const ks=el.dataset.p.split('.');let o=patch;ks.slice(0,-1).forEach(k=>o=o[k]=o[k]||{});o[ks.at(-1)]=el.type==='checkbox'?el.checked:el.type==='number'?parseFloat(el.value):el.value});await j('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});alert('Saved')}
+loadSettings();refresh();loadClips();setInterval(refresh,2500);setInterval(loadClips,5000);
+</script></body></html>
