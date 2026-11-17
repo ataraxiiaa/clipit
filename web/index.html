@@ -21,6 +21,7 @@ button.g{border-color:var(--ok);color:var(--ok)}button.r{border-color:var(--bad)
 .clip video{width:100%;border-radius:8px;background:#000;max-height:360px}
 .score{font-size:22px;font-weight:700}.bd{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
 .spark{display:flex;align-items:flex-end;gap:1px;height:34px;margin:6px 0}.spark i{flex:1;background:var(--acc);min-height:1px;opacity:.85}
+.sel{display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer;font-size:12px;color:var(--mut)}.sel input{width:18px;height:18px}
 .logs{font:11px/1.4 ui-monospace,Consolas,monospace;max-height:220px;overflow:auto;white-space:pre-wrap}
 .E,.ERROR{color:var(--bad)}.WARNING{color:var(--warn)}label{display:flex;justify-content:space-between;gap:8px;align-items:center;margin:4px 0;font-size:13px}
 label input[type=number]{width:80px}details summary{cursor:pointer;color:var(--mut)}
@@ -47,6 +48,11 @@ label input[type=number]{width:80px}details summary{cursor:pointer;color:var(--m
   <select id="f_stream" onchange="loadClips()"><option value="">all streamers</option></select>
   <label style="gap:4px">layout<select id="layout"><option>auto</option><option>blur</option><option>crop</option><option>split</option><option>landscape</option></select></label>
   <label style="gap:4px">platform<select id="platform"><option>tiktok</option><option>reels</option><option>shorts</option></select></label></div>
+ <div class="card" id="bulkbar" style="padding:8px 12px"><div class="row" style="margin:0">
+  <label style="gap:6px;margin:0"><input type="checkbox" id="selall" onchange="selAll(this.checked)">Select all</label><span id="selcount" class="mut">0 selected</span>
+  <button class="g" onclick="bulk('accept')">Accept</button><button class="r" onclick="bulk('reject')">Reject &amp; delete</button>
+  <button onclick="bulk('export')">Export</button><button onclick="bulk('codex')">Ask Codex</button><button onclick="zipSel()">Download .zip</button>
+  <span id="bulkstat" class="mut"></span></div></div>
  <div class="clips" id="clips"></div>
 </section></main>
 <script>
@@ -68,6 +74,7 @@ async function refresh(){
  const g=s.gpu;$('gpu').textContent=g?`GPU ${g.used_mb}/${g.total_mb} MB · ${g.util}%`:'GPU n/a';
  $('asr').textContent='Whisper: '+(s.asr.loaded?s.asr.device:'idle');$('llm').textContent='LLM: '+(s.llm.up?(s.llm.model_present?'ready':'model missing'):'offline');
  $('queue').textContent=`AI queue ${s.queue}${s.current_job?' · working':''} · done ${s.jobs_done} · failed ${s.jobs_failed}`;
+ const bk=(s.bulk||[]).slice(-1)[0];$('bulkstat').textContent=bk?(bk.state==='running'?`${bk.action} ${bk.done}/${bk.total}…`:`last ${bk.action}: ${bk.done}/${bk.total} done${bk.errors.length?', '+bk.errors.length+' failed ('+bk.errors[0]+')':''}`):'';
  $('vods').innerHTML=(s.vods||[]).map(vodHtml).join('');
  $('streams').innerHTML=s.streams.map(x=>{const r=x.runtime,a=r.analysis||{};const run=!['stopped','idle',undefined].includes(r.state);
   return `<div class="card"><div class="row"><b>${esc(x.streamer||x.name)}</b><span class="pill ${r.state}">${r.state}</span><span class="pill">${x.platform}</span></div>
@@ -81,9 +88,9 @@ async function refresh(){
 let lastClips='';
 async function loadClips(force){
  const q=new URLSearchParams({status:'ready'});if($('f_review').value)q.set('review',$('f_review').value);if($('f_stream').value)q.set('stream_id',$('f_stream').value);
- const cs=await j('/api/clips?'+q);const sig=JSON.stringify(cs.map(c=>[c.id,c.review,c.exports.length,c.score,!!c.codex]));if(sig===lastClips&&!force)return;lastClips=sig;
+ const cs=await j('/api/clips?'+q);VISIBLE=cs.map(c=>c.id);[...SEL].forEach(i=>{if(!VISIBLE.includes(i))SEL.delete(i)});const sig=JSON.stringify(cs.map(c=>[c.id,c.review,c.exports.length,c.score,!!c.codex]));if(sig===lastClips&&!force)return;lastClips=sig;setTimeout(upd,0);
  $('clips').innerHTML=cs.map(c=>{const sc=c.scores||{};const ex=c.exports;const vid=ex.length?`/media/export/${ex[ex.length-1].id}`:`/media/raw/${c.id}`;
-  return `<div class="card clip"><video controls preload="metadata" src="${vid}"></video>
+  return `<div class="card clip"><label class="sel"><input type="checkbox" ${SEL.has(c.id)?'checked':''} onchange="tog(${c.id},this.checked)"> select</label><video controls preload="metadata" src="${vid}"></video>
   <div class="row"><span class="score">${Math.round(c.score*100)}</span><span class="pill">${esc(c.category)}</span><span class="pill">${esc(c.review)}</span><span class="mut">${esc(c.streamer)} · ${Math.round(c.t_end-c.t_start)}s · ${c.t_start<1e8?(Math.floor(c.t_start/60)+':'+String(Math.floor(c.t_start%60)).padStart(2,'0')+' in video'):new Date(c.t_start*1000).toLocaleTimeString()}</span></div>
   <b>${esc(c.title)}</b><div class="mut">${esc(c.reason)}</div>
   <div class="bd"><span class="pill">audio ${sc.audio?.toFixed?.(2)}</span><span class="pill">visual ${sc.visual?.toFixed?.(2)}</span><span class="pill">chat ${sc.chat?.toFixed?.(2)}</span><span class="pill">speech ${sc.speech}</span><span class="pill">${sc.llm_used?'LLM':'keywords'}</span></div>
@@ -92,6 +99,14 @@ async function loadClips(force){
   <div class="row"><button class="g" onclick="rv(${c.id},'accepted')">Accept</button><button class="r" onclick="rv(${c.id},'rejected')">Reject</button>
   <button onclick="ex(${c.id})">Export</button><button id="cx${c.id}" onclick="cx(${c.id})">Ask Codex</button>${ex.map(e=>`<a class="pill" href="/media/export/${e.id}" download>${e.platform}/${e.layout}</a>`).join('')}<a class="pill" href="/media/raw/${c.id}" download>raw 16:9</a></div></div>`}).join('')||'<div class="mut">No clips yet. Clips appear here after the AI accepts a moment.</div>';
 }
+const SEL=new Set();let VISIBLE=[];
+function upd(){$('selcount').textContent=SEL.size+' selected';$('selall').checked=VISIBLE.length>0&&VISIBLE.every(i=>SEL.has(i))}
+function tog(id,on){on?SEL.add(id):SEL.delete(id);upd()}
+function selAll(on){if(on)VISIBLE.forEach(i=>SEL.add(i));else SEL.clear();document.querySelectorAll('#clips .sel input').forEach(el=>el.checked=on);upd()}
+async function bulk(a){const ids=[...SEL];if(!ids.length)return alert('Select some clips first.');
+ const msg={reject:`Reject and permanently delete ${ids.length} clip(s) and their exports?`,codex:`Send ${ids.length} clip(s) (transcripts, scores and 4 frames each) to OpenAI via your Codex login?`,export:`Export ${ids.length} clip(s) as ${$('layout').value} / ${$('platform').value}?`,accept:`Accept ${ids.length} clip(s)?`}[a];
+ if(!confirm(msg))return;try{await post('/api/bulk',{ids,action:a,layout:$('layout').value,platform:$('platform').value});if(a==='reject')SEL.clear();loadClips(1);refresh()}catch(e){alert(e.message)}}
+function zipSel(){const ids=[...SEL];if(!ids.length)return alert('Select some clips first.');location.href='/api/zip?kind=export&ids='+ids.join(',')}
 async function rv(id,r){if(r==='rejected'&&!confirm('Reject and permanently delete this clip and its exports?'))return;try{await post(`/api/clips/${id}/review`,{review:r});loadClips(1)}catch(e){alert(e.message)}}
 async function cx(id){if(!confirm('This sends the clip transcript, scores and 4 small frames to OpenAI through your Codex login. Continue?'))return;const b=$('cx'+id);b.disabled=true;b.textContent='Asking Codex…';try{await post(`/api/clips/${id}/codex`);loadClips(1)}catch(e){alert(e.message);b.disabled=false;b.textContent='Ask Codex'}}
 async function ex(id){try{await post(`/api/clips/${id}/export`,{layout:$('layout').value,platform:$('platform').value});loadClips(1)}catch(e){alert(e.message)}}
