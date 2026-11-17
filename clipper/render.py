@@ -117,7 +117,9 @@ def detect_facecam(frames, W, H):
         g = cv2.cvtColor(cv2.resize(f, (960, int(H * scale))), cv2.COLOR_BGR2GRAY)
         for (x, y, w, h) in casc.detectMultiScale(g, 1.15, 6, minSize=(36, 36)):
             area = (w * h) / (g.shape[0] * g.shape[1])
-            if 0.002 < area < 0.06:
+            fx, fy = (x + w / 2) / g.shape[1], (y + h / 2) / g.shape[0]
+            in_corner = (fx < 0.3 or fx > 0.7) and (fy < 0.35 or fy > 0.65)   # overlays sit in a corner; a centred face is the main shot
+            if 0.002 < area < 0.06 and in_corner:
                 boxes.append((x / scale, y / scale, w / scale, h / scale))
     if len(boxes) < max(2, len(frames) // 3):
         return None
